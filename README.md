@@ -11,7 +11,6 @@ A retrieval augmented chatbot that answers questions about Republic Act No. 1037
 - Answers in English or Tagalog, choosing from the language of the current question rather than the previous turn.
 - Clamps the answer to the sentence count the question asked for, in English or Filipino.
 - Scores a question with a hybrid of the Qdrant dense score and IDF weighted lexical overlap, then blends the two.
-- Routes each question before searching: greetings, capability questions, explicit section references, conversational follow ups, out of scope questions, and general questions each take a different path.
 - Pins the section a question names, so `section 12` returns Section 12, and pins the definitions section for definitional questions so `what is X` reaches Section 3.
 - Keeps the last four turns of context, so `expand that` resolves to the section under discussion.
 - Sends only the retrieved sections to the LLM and instructs it to cite them and never invent a section number.
@@ -44,16 +43,18 @@ data/dpa_articles.json         45 sections, parsed and committed
         v
 data/section_index.json        cached vectors, built once on first run
         |
-        |  src/Dpa.Rag.Core, ActIndex
-        |    dense cosine blended with IDF weighted lexical overlap
+        |  src/Dpa.Rag.Core, ActIndex, QdrantVectorStore
+        |    cosine distance from Qdrant blended with IDF weighted
+        |    lexical overlap at 55 percent lexical, 45 percent dense
         v
-  top 8 sections
+  top 5 sections, one per chapter for a broad question
         |
         |  src/Dpa.Rag.Core, ActAnswerer
         |    system prompt forbids outside knowledge and invented sections
         v
   src/Dpa.Rag.Core, LlmClient
-        |    deepseek-ai/deepseek-v4.1-flash, then z-ai/glm-5.3-flash on failure
+        |    qwen/qwen3.8-27b, then gpt-oss-120b, then z-ai/glm-5.3-flash,
+        |    then qwen2.5:7b locally, each rung optional
         v
   src/Dpa.Rag.Api              POST /api/chat, GET /api/act, GET /api/health
         |
@@ -61,21 +62,15 @@ data/section_index.json        cached vectors, built once on first run
   web                          React, Motion, Animate UI primitives, served from wwwroot
 ```
 
-## Why these choices
+## Design notes
 
-**C# for the whole backend.** The role lists Node.js, Python, PHP, Java and C#. C# is the language the engineer already ships in, so every line is defensible without an explanation. The .NET equivalent of the Python RAG stack would have cost hours for no gain here.
+**C# and .NET 10** across the backend, `all-MiniLM-L6-v2` through ONNX Runtime for embeddings, Qdrant for storage and search, React with Motion for the client.
 
-**Embeddings run locally.** Every embedding model on the NVIDIA NIM endpoint was end of life when this was built: `nvidia/nv-embed-v1` returned HTTP 410 on 25 August 2026, `nvidia/nv-embedcode-7b-v1` and `baai/bge-m3` likewise. Running `all-MiniLM-L6-v2` through ONNX Runtime removes the dependency entirely. The 384 dimension vectors are computed once and cached, so the running system makes zero embedding calls.
+**Embeddings run locally.** Every embedding model on the NVIDIA NIM endpoint was end of life when this was built, so a local model removes the dependency, the cost and the rate limit. The 384 dimension vectors are computed once and cached, so the running system makes no embedding calls.
 
-**Retrieval is hand written.** A 45 section corpus does not need a hosted vector database. The index is a list of sections with a float array each, and scoring is a cosine loop. That is roughly one hundred and fifty readable lines, and it means there is no black box between a question and the sections it matched.
+**Chunking is by section.** Section numbers are the citation key, so fixed token windows would cut a provision in half and make the citation meaningless.
 
-**Hybrid scoring.** Pure dense retrieval on a short legal text misses exact term matches. Pure lexical matching misses paraphrase. Dense similarity is blended at 55 percent against IDF weighted lexical overlap at 45 percent, where the IDF weight is computed over the corpus and the title carries 60 percent of the lexical signal. A definitional question gets a boost for Section 3, because the Act defines its terms there.
-
-**Chunking is by section.** Legal text has natural boundaries and section numbers are the citation key. Splitting into fixed token windows would cut Section 12 in half and make citations meaningless.
-
-**The LLM never sees the question alone.** It receives the question plus the retrieved sections and nothing else, which makes hallucination structurally harder. Any section number it cites that was not in the evidence is stripped and the answer is flagged as unreliable.
-
-**Declining is a feature.** Three of the ten verification questions are outside the scope of the Act. A retrieval augmented system that cannot say no is not trustworthy for a legal question.
+**The model never sees the question alone.** It receives the question plus the retrieved sections, which makes citing something outside that evidence harder. Any section number it cites that was not supplied is stripped, and the interface labels a section as used only when the answer cites it.
 
 ## Corpus provenance
 
@@ -83,7 +78,7 @@ Source: National Privacy Commission, `data/source/dpa_npc.pdf`, downloaded manua
 
 The publisher's file name reads `Republic Act 10173`, which is a typo on their side. The correct act number is **10379**. The document content is correct and the parsed text matches the enacted law.
 
-The parser strips the site's navigation chrome, repeated page headers, "Back To Top" links and the table of contents, then splits the body on `SEC. n.` and `SECTION n.` headings. All 45 sections are present in ascending order with no gaps, no chapter text leaking into section bodies, and no site furniture in the output.
+The parser strips the site's navigation chrome, repeated page headers, "Back To Top" links and the table of contents, then splits the body on `SEC. n.` and `SECTION n.` headings. It also removes the site footer that sits mid document, which otherwise swallows the signature block in Section 45, and collapses the repeated names that PDF text extraction leaves behind. All 45 sections are present in ascending order with no gaps, no chapter text leaking into section bodies, and no site furniture in the output.
 
 ## Running it
 
@@ -141,7 +136,7 @@ The suite is split in two on purpose. Logic tests never call a model, so they ar
 | Tier | What it covers | Cost |
 | --- | --- | --- |
 | `dotnet test` | fifty cases: routing, section pinning, bilingual detection, citation stripping, sentence clamping, parser cleanup | about one second |
-| `stress_test.py` | seventy eight cases against a live model: legal accuracy, refusal, injection, malformed input, language, length, breadth, consistency | minutes |
+| `stress_test.py` | fifty three cases against a live model, across legal accuracy, refusal, drift, prompt injection, malformed input, language routing, breadth, citation honesty, length and consistency | minutes |
 
 `LLM_CHAIN=ollama` pins the integration tier to the local model so it costs nothing and returns identical results every run.
 
@@ -149,7 +144,7 @@ The suite is split in two on purpose. Logic tests never call a model, so they ar
 
 `verify_intents.py` covers twenty two routing cases: grounded legal questions, explicit section references, greetings, capability questions, out of scope questions, and follow ups that resolve against conversation memory.
 
-`stress_test.py` runs forty nine cases across eight categories: grounded legal accuracy, out of scope refusal, drift resistance, adversarial prompt injection, malformed input, language routing, length instructions, and consistency across five identical repeats of the same question. It fails on a degenerate repetition loop in any answer, which is the failure mode a small local model falls into.
+`stress_test.py` runs fifty three cases across ten categories: grounded legal accuracy, out of scope refusal, drift resistance, adversarial prompt injection, malformed input, language routing, broad questions, citation honesty, length instructions, and five identical repeats of the same question. It fails on a degenerate repetition loop in any answer, which is the failure mode a small local model falls into, and on any chip that names a section the answer did not cite.
 
 ## Layout
 
@@ -157,7 +152,7 @@ The suite is split in two on purpose. Logic tests never call a model, so they ar
 src/Dpa.Rag.Core      parser, embedder, index, answerer, LLM client
 src/Dpa.Rag.Api       HTTP layer and static hosting
 tools/Dpa.Rag.Ingest  PDF to sections
-tests/Dpa.Rag.Tests   parser unit tests
+tests/Dpa.Rag.Tests   parser, router and grounding unit tests
 web                   client
 models                MiniLM ONNX weights and vocabulary, 86 MB
 data                  source PDF, parsed corpus, cached vectors
@@ -166,8 +161,8 @@ scripts               verification harness
 
 ## Known limits
 
-- Latency on the primary free model is 10 to 20 seconds per answer. The secondary model is usually faster.
-- The relevance floor and the blend weights are tuned against this ten question harness, not a larger benchmark.
-- No persistence. Every question is answered fresh, with no conversation memory.
+- Free hosted models are the fast path at roughly half a second, and they are rate limited per day. The local model answers in five to fifteen seconds with no limit and no cost, which is why it sits last in the chain rather than first.
+- The relevance floor and the blend weights are tuned against this harness, not a larger benchmark.
+- No persistence. The transcript lives in the browser and is lost on refresh, though the last four turns are carried as context while the page stays open.
 - No rate limiting on the API. It is a local demonstration surface.
-- The Act text is the 2012 law only. Implementing Rules and subsequent amendments are not included.
+- The Act text is the 2012 law only. The Implementing Rules and later amendments are not included.
