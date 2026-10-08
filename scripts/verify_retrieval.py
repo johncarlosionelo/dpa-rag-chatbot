@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import time
@@ -21,7 +22,7 @@ def ask(question):
     started = time.time()
     raw = subprocess.run(
         [
-            "curl", "-s", "-m", "180", "-X", "POST", "http://127.0.0.1:5199/api/chat",
+            "curl", "-s", "-m", "180", "-X", "POST", os.environ.get("CHAT_URL", "http://127.0.0.1:5199/api/chat"),
             "-H", "Content-Type: application/json",
             "-d", json.dumps({"question": question}),
         ],
@@ -35,7 +36,7 @@ for question, answerable, expected in CASES:
     cited = set(__import__("re").findall(r"Section (\d+)", reply["answer"]))
     supplied = {source["number"] for source in reply["sources"]}
     invented = cited - supplied
-    declined = "does not cover" in reply["answer"] or "cannot be answered" in reply["answer"]
+    declined = any(marker in reply["answer"] for marker in ("does not cover", "cannot be answered", "not pretend to answer", "outside Republic Act", "outside this Act", "wala iyon sa batas", "hindi saklaw"))
 
     ok = not invented
     ok = ok and not (answerable and declined)
