@@ -7,26 +7,31 @@ to demo it, read **Quick start** and stop.
 
 ## Quick start
 
-Two commands. That is the whole demo path.
-
-**Terminal 1**
-
-```bash
-colima start --cpu 2 --memory 4 --disk 20 && /opt/homebrew/opt/ollama/bin/ollama serve
-```
-
-Leave it running. It prints a wall of logs, that is normal.
-
-**Terminal 2**
+One command. That is the whole demo path.
 
 ```bash
 cd ~/Desktop/dpa-rag && make dev
 ```
 
-`make dev` starts the vector database, then runs the app. Open
-**http://127.0.0.1:5199**.
+It starts the vector database, starts the local model, loads your keys, prints
+the link and opens your browser. You see:
 
-Type a question and wait about 15 seconds on a cold local model. That is expected.
+```
+  qdrant    up
+  ollama    up
+  groq      loaded
+   open the chat -> http://127.0.0.1:5199
+```
+
+Type a question. With a key loaded the answer lands in about a second.
+
+To stop everything:
+
+```bash
+make stop
+```
+
+It kills the whole process tree and tells you if anything is still listening.
 
 ---
 
@@ -115,7 +120,7 @@ Run these from the repository root.
 | `make local` | start the local model only |
 | `make open` | open the app in the browser |
 | `make secrets` | show whether a cloud key is loaded |
-| `make dev` | vector database plus the app, the demo path |
+| `make dev` | everything, the demo path, this is the one you need |
 | `make test` | fast verification, about six seconds |
 | `make check` | print what the vector database is holding |
 | `make status` | show which services are up |
@@ -249,15 +254,17 @@ Another instance is still running. `make stop`, then start again.
 
 ---
 
-## Why there are two terminals
+## Why the browser opens by itself
 
-Colima and Ollama are long running services. They hold their terminal open and
-keep running while you work. The app is started separately so it can print its
-startup banner and stay attached to its own logs.
+`make dev` waits a few seconds, then opens the link, because on a cold start the
+app is still compiling when the command returns. Opening too early would land on
+an empty tab.
 
-If you only have one terminal, background the first service:
+If you prefer to open it yourself:
 
 ```bash
-nohup /opt/homebrew/opt/ollama/bin/ollama serve > /tmp/ollama.log 2>&1 &
-make dev
+make open
 ```
+
+`make dev` never needs a second terminal. Ollama and Colima both start in the
+background.
