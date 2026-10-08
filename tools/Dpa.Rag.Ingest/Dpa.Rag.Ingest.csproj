@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Dpa.Rag.Ingest</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/Dpa.Rag.Core/Dpa.Rag.Core.csproj" />
+    <PackageReference Include="PdfPig" Version="0.1.17-alpha-202610070034-bdbc5" />
+  </ItemGroup>
+</Project>

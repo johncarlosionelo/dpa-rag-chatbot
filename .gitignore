@@ -1,0 +1,8 @@
+bin/
+obj/
+node_modules/
+*.user
+models/
+data/section_index.json
+src/Dpa.Rag.Api/wwwroot/
+*.tsbuildinfo
