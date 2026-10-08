@@ -45,6 +45,16 @@ if (providers.Count == 0)
     throw new InvalidOperationException($"LLM_CHAIN matched no provider: {string.Join(",", pinned)}");
 }
 
+var unresolved = providers
+    .Where(provider => !provider.KeyOptional && KeyOf(provider.KeyEnv) is null)
+    .Select(provider => provider.KeyEnv)
+    .ToList();
+
+if (unresolved.Count > 0)
+{
+    throw new InvalidOperationException($"set one of: {string.Join(" or ", unresolved)}");
+}
+
 var targets = new List<LlmTarget>();
 foreach (var provider in providers)
 {
@@ -188,6 +198,12 @@ static string ResolveOptional(string keyEnv)
 }
 
 static string Placeholder(string name) => $"local-{name}";
+
+static string? KeyOf(string keyEnv) =>
+    keyEnv
+        .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(Environment.GetEnvironmentVariable)
+        .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
 
 static string ResolveKey(string keyEnv)
 {
