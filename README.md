@@ -85,20 +85,20 @@ The parser strips the site's navigation chrome, repeated page headers, "Back To 
 Two commands. See [RUNBOOK.md](RUNBOOK.md) for the full walkthrough.
 
 ```bash
-# terminal 1, leave running
-colima start --cpu 2 --memory 4 --disk 20 && /opt/homebrew/opt/ollama/bin/ollama serve
-
-# terminal 2
 make dev
 ```
 
 Then open <http://127.0.0.1:5199>.
 
-`make dev` starts Qdrant and then the app. No API key is required: the chain
-tries Groq, then NVIDIA, then the local model, and every rung after the first is
-optional.
+`make dev` starts Qdrant, loads `.env` if it exists, and runs the app. No API key
+is required: the chain tries Groq, then NVIDIA, then the local model, and every
+rung after the first is optional.
+
+Put keys in `.env`, which is ignored by git and never print them:
 
 ```bash
+make local     # start the local model, the fallback
+make secrets   # show whether a cloud key is loaded, never prints it
 make infra    # vector database only
 make dev      # vector database and app, the demo path
 make test     # verification, about six seconds

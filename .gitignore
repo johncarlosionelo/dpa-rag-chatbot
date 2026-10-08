@@ -8,4 +8,7 @@ src/Dpa.Rag.Api/wwwroot/
 *.tsbuildinfo
 .DS_Store
 .kilo/
+.env
+.env.*
+!.env.example
 tmp/

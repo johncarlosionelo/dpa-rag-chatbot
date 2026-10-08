@@ -80,15 +80,28 @@ cannot be rate limited or go down with an outage.
 
 You need **no key at all** to run this. The local model answers on its own.
 
-Add keys only to make it faster:
+Add keys only to make it faster. Put them in `.env` in the repository root.
+The file is ignored by git, so a key there can never be committed, and `make dev`
+loads it for you. Never type a key into the terminal, where a stray character
+turns it into an invalid key.
 
 ```bash
-export GROQ_API_KEY=...        # fastest, roughly half a second per answer
-export DPA_RAG_LLM_KEY=...     # second cloud fallback
+GROQ_API_KEY=...
+DPA_RAG_LLM_KEY=...
 ```
+
+```bash
+chmod 600 .env
+make secrets
+```
+
+`make secrets` prints `loaded` or `none` and never prints the key itself.
 
 The chain tries Groq, then NVIDIA, then the local model. Each rung after the
 first is optional, so any single key works and no key also works.
+
+**Local model only**, expect roughly twenty seconds per answer. **With Groq**,
+roughly one second.
 
 ---
 
@@ -99,6 +112,8 @@ Run these from the repository root.
 | Command | What it does |
 | --- | --- |
 | `make infra` | start the vector database only |
+| `make local` | start the local model, the fallback |
+| `make secrets` | show whether a cloud key is loaded |
 | `make dev` | vector database plus the app, the demo path |
 | `make test` | fast verification, about six seconds |
 | `make check` | print what the vector database is holding |
