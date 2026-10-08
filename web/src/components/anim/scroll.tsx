@@ -11,6 +11,7 @@ type ScrollAreaProps = {
   viewportClassName?: string;
   fadeMs?: number;
   stickToBottom?: boolean;
+  streaming?: boolean;
   viewportRef?: React.Ref<HTMLDivElement>;
 };
 
@@ -21,12 +22,21 @@ export function ScrollArea({
   fadeMs = 900,
   stickToBottom = false,
   viewportRef,
+  streaming: streamingProp = false,
 }: ScrollAreaProps) {
   const viewport = React.useRef<HTMLDivElement>(null);
   const hide = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const wasPinned = React.useRef(true);
   const lastContent = React.useRef(0);
   const lastHeight = React.useRef(0);
+  const frame = React.useRef<number | null>(null);
+  const animating = React.useRef(false);
+  const settle = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const streaming = React.useRef(streamingProp);
+
+  React.useEffect(() => {
+    streaming.current = streamingProp;
+  }, [streamingProp]);
   const [active, setActive] = React.useState(false);
   const [overflowing, setOverflowing] = React.useState(false);
 
@@ -68,14 +78,57 @@ export function ScrollArea({
     hide.current = setTimeout(() => setActive(false), fadeMs);
   }, [extent, offset]);
 
+  const release = React.useCallback(() => {
+    animating.current = false;
+
+    const el = viewport.current;
+    if (el) {
+      const gap = el.scrollHeight - (el.scrollTop + el.clientHeight);
+      wasPinned.current = gap <= 24;
+    }
+  }, []);
+
   const onScroll = React.useCallback(() => {
     const el = viewport.current;
-    if (!el) return;
+    if (!el || animating.current) return;
 
     const gap = el.scrollHeight - (el.scrollTop + el.clientHeight);
     wasPinned.current = gap <= 24;
     paint();
   }, [paint]);
+
+  const releaseRef = React.useRef(release);
+
+  React.useEffect(() => {
+    releaseRef.current = release;
+  }, [release]);
+
+  const follow = React.useCallback((behavior: ScrollBehavior) => {
+    const el = viewport.current;
+    if (!el) return;
+
+    if (frame.current) return;
+
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null;
+
+      const current = viewport.current;
+      if (!current || !stickToBottom || !wasPinned.current) return;
+
+      const gap = current.scrollHeight - (current.scrollTop + current.clientHeight);
+
+      if (gap <= 1) return;
+
+      animating.current = true;
+      current.scrollTo({ top: current.scrollHeight, behavior });
+
+      if (behavior === 'smooth') {
+        current.addEventListener('scroll', releaseRef.current, { once: true });
+      } else {
+        animating.current = false;
+      }
+    });
+  }, [stickToBottom]);
 
   const measure = React.useCallback(() => {
     const el = viewport.current;
@@ -84,38 +137,57 @@ export function ScrollArea({
     const content = el.scrollHeight;
     const grew = content > lastContent.current + 1;
     const shrank = el.clientHeight < lastHeight.current - 1;
+
     lastContent.current = content;
     lastHeight.current = el.clientHeight;
 
-    if (grew && stickToBottom && wasPinned.current) {
-      el.scrollTo({ top: content, behavior: 'smooth' });
-    } else if (shrank && stickToBottom && wasPinned.current) {
-      el.scrollTo({ top: content, behavior: 'auto' });
+    if (!stickToBottom || !wasPinned.current) {
+      paint(false);
+      return;
+    }
+
+    if (shrank) {
+      follow('auto');
+    } else if (grew) {
+      follow(streaming.current ? 'auto' : 'smooth');
     }
 
     paint(false);
-  }, [paint, stickToBottom]);
+  }, [follow, paint, stickToBottom]);
 
   React.useEffect(() => {
     const el = viewport.current;
     if (!el) return;
 
-    lastContent.current = el.scrollHeight;
-    lastHeight.current = el.clientHeight;
-
     const observer = new ResizeObserver(() => measure());
     observer.observe(el);
 
+    const mutations = new MutationObserver(() => measure());
+
     for (const child of Array.from(el.children)) {
       observer.observe(child);
+      mutations.observe(child, { childList: true, subtree: true, characterData: true });
     }
 
-    return () => observer.disconnect();
-  }, [measure, children]);
+    return () => {
+      observer.disconnect();
+      mutations.disconnect();
+    };
+  }, [measure]);
 
   React.useEffect(() => () => {
     if (hide.current) clearTimeout(hide.current);
+    if (frame.current) cancelAnimationFrame(frame.current);
+    if (settle.current) clearTimeout(settle.current);
   }, []);
+
+  React.useEffect(() => {
+    if (settle.current) clearTimeout(settle.current);
+
+    settle.current = setTimeout(() => {
+      if (!animating.current) release();
+    }, 140);
+  }, [release, streamingProp]);
 
   return (
     <div className={cn('relative', className)}>

@@ -92,7 +92,7 @@ export function App() {
         </a>
       </header>
 
-      <ScrollArea className="min-h-0 flex-1 pr-2" stickToBottom viewportRef={scroller}>
+      <ScrollArea className="min-h-0 flex-1 pr-2" stickToBottom streaming={pending} viewportRef={scroller}>
         <div className="px-3 py-6">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
           {turns.length === 0 && <Intro onPick={send} />}
