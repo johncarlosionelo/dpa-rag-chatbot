@@ -46,6 +46,17 @@ public sealed partial class ActParser
         " ABOUT GOVPH ", " NPC PRIVACY NOTICE ", " CONTACT US ", " BACK TO TOP ",
     ];
 
+    private static readonly string[] Footer =
+    [
+        " All content is in the public domain unless otherwise stated. ",
+        " info@privacy.gov.ph ",
+    ];
+
+    [GeneratedRegex(
+        @"All content is in the public domain[^@]{0,600}?info@privacy\.gov\.ph",
+        RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex FooterRun();
+
     private const string Enacted = "Be it enacted";
     private const int MinimumBodyCharacters = 15;
 
@@ -85,9 +96,9 @@ public sealed partial class ActParser
             var slice = lines[(mark.Line + 1)..stop].Where(l => !ChapterLine().IsMatch(l));
             var continued = Clean(string.Join(' ', slice));
 
-            var body = mark.Body.Length > 0 && continued.Length > 0
+            var body = Clean(mark.Body.Length > 0 && continued.Length > 0
                 ? $"{mark.Body} {continued}"
-                : continued.Length > 0 ? continued : mark.Body;
+                : continued.Length > 0 ? continued : mark.Body);
 
             if (body.Length < MinimumBodyCharacters)
             {
@@ -233,19 +244,46 @@ public sealed partial class ActParser
         return false;
     }
 
+    [GeneratedRegex(@"(?<unit>[A-Za-z][A-Za-z0-9\.\,\'\- ]{7,44}?)(?:\s*\k<unit>){1,}")]
+    private static partial Regex Repeated();
+
+    private static string CollapseRepeats(string value)
+    {
+        var previous = string.Empty;
+
+        while (!string.Equals(previous, value, StringComparison.Ordinal))
+        {
+            previous = value;
+            value = Repeated().Replace(value, m => m.Groups["unit"].Value.TrimEnd());
+        }
+
+        return value;
+    }
+
     private static string Clean(string value)
     {
         var cleaned = AnySpace().Replace(value, " ").Trim();
+
+        cleaned = FooterRun().Replace(cleaned, " ");
+
+        foreach (var fragment in Footer)
+        {
+            cleaned = cleaned.Replace(fragment, " ", StringComparison.OrdinalIgnoreCase);
+        }
+
+        cleaned = CollapseRepeats(AnySpace().Replace(cleaned, " ").Trim());
+        var cut = -1;
+
         foreach (var marker in Bleed)
         {
-            var at = cleaned.LastIndexOf(marker, StringComparison.Ordinal);
-            if (at > 0)
+            var at = cleaned.IndexOf(marker, StringComparison.Ordinal);
+            if (at > 0 && (cut < 0 || at < cut))
             {
-                cleaned = cleaned[..at].Trim();
+                cut = at;
             }
         }
 
-        return cleaned;
+        return cut > 0 ? cleaned[..cut].Trim() : cleaned;
     }
 
     private sealed record Mark(int Line, string Number, string Title, string Body);
