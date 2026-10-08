@@ -13,6 +13,9 @@ public sealed partial class ActAnswerer
     private const int SectionTail = 500;
     private const int MemoryTurns = 4;
 
+    [GeneratedRegex(@"[ \t]{2,}")]
+    private static partial Regex AnySpace();
+
     private static readonly Dictionary<string, int> Words = new(StringComparer.OrdinalIgnoreCase)
     {
         ["one"] = 1,
@@ -56,7 +59,13 @@ public sealed partial class ActAnswerer
             .Distinct()
             .ToList();
 
-        var route = _router.Route(question, priorSections, prior.Count);
+        var priorTopic = prior
+            .Where(t => t.Role is "user" or "assistant")
+            .Reverse()
+            .Select(t => t.Content)
+            .FirstOrDefault(content => SectionReference().IsMatch(content) || content.Length > 12);
+
+        var route = _router.Route(question, priorSections, prior.Count, priorTopic);
 
         var filipino = QueryRouter.IsFilipino(question);
 
@@ -314,6 +323,19 @@ public sealed partial class ActAnswerer
         return cited;
     }
 
+    private static string Name(IReadOnlySet<string> allowed, Match match)
+    {
+        return string.Empty;
+    }
+
+    [GeneratedRegex(@"^\s*(?:-\s+|\d+[.)]\s+)?\**[A-Z]")]
+    private static partial Regex OrphanLead();
+
+    private static string Orphan(string line, IReadOnlySet<string> allowed)
+    {
+        return OrphanLead().IsMatch(line) ? line : string.Empty;
+    }
+
     [GeneratedRegex(@"\*{2,}")]
     private static partial Regex Emphasis();
 
@@ -323,21 +345,21 @@ public sealed partial class ActAnswerer
         var flattened = Emphasis().Replace(reply, string.Empty).Trim();
 
         var cleaned = SectionReference().Replace(flattened, match =>
-            allowed.Contains(match.Groups[1].Value)
-                ? $"**{match.Value}**"
-                : string.Empty);
+            allowed.Contains(match.Groups[1].Value) ? $"**{match.Value}**" : Name(allowed, match));
 
-        return AnySpace().Replace(cleaned, " ")
-            .Replace(" ,", ",")
-            .Replace("( )", string.Empty)
-            .Trim();
+        var _ = allowed;
+
+        var lines = cleaned
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => Orphan(line.Trim(), allowed))
+            .Where(line => line.Length > 0)
+            .ToList();
+
+        return string.Join("\n", lines).Trim();
     }
 
     [GeneratedRegex(@"\bSection\s+(\d+)", RegexOptions.IgnoreCase)]
     private static partial Regex SectionReference();
-
-    [GeneratedRegex(@"[ \t]{2,}")]
-    private static partial Regex AnySpace();
 
     private static string SystemPrompt() =>
         """

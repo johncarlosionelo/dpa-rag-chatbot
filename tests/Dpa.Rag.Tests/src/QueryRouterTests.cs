@@ -99,4 +99,30 @@ public sealed class QueryRouterTests
         Assert.Contains("approved", expanded, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("sgd", expanded, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void TreatsExplainThatAsAFollowUpEvenWithoutANumber()
+    {
+        var route = Router().Route("explain that to me in tagalog", ["1", "11", "7", "9", "16"], 5);
+
+        Assert.Equal(Intent.FollowUp, route.Intent);
+        Assert.NotEqual("1", Assert.Single(route.SectionHints));
+    }
+
+    [Fact]
+    public void NeverPinsAPlainExplainRequestToTheTitleSection()
+    {
+        var route = Router().Route("explain that in one sentence", ["1"], 2);
+
+        Assert.DoesNotContain("1", route.SectionHints);
+    }
+
+    [Fact]
+    public void FallsBackToThePriorTopicWhenTheHistoryCarriesNoSectionNumber()
+    {
+        var route = Router().Route("explain that to me in tagalog", [], 3, "the processing of personal information under the Act");
+
+        Assert.Equal(Intent.FollowUp, route.Intent);
+        Assert.Contains("personal information", route.ResolvedQuestion, StringComparison.Ordinal);
+    }
 }

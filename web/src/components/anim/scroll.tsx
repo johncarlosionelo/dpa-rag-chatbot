@@ -26,6 +26,7 @@ export function ScrollArea({
   const hide = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const wasPinned = React.useRef(true);
   const lastContent = React.useRef(0);
+  const lastHeight = React.useRef(0);
   const [active, setActive] = React.useState(false);
   const [overflowing, setOverflowing] = React.useState(false);
 
@@ -82,10 +83,14 @@ export function ScrollArea({
 
     const content = el.scrollHeight;
     const grew = content > lastContent.current + 1;
+    const shrank = el.clientHeight < lastHeight.current - 1;
     lastContent.current = content;
+    lastHeight.current = el.clientHeight;
 
     if (grew && stickToBottom && wasPinned.current) {
-      el.scrollTop = content;
+      el.scrollTo({ top: content, behavior: 'smooth' });
+    } else if (shrank && stickToBottom && wasPinned.current) {
+      el.scrollTo({ top: content, behavior: 'auto' });
     }
 
     paint(false);
@@ -96,6 +101,7 @@ export function ScrollArea({
     if (!el) return;
 
     lastContent.current = el.scrollHeight;
+    lastHeight.current = el.clientHeight;
 
     const observer = new ResizeObserver(() => measure());
     observer.observe(el);
@@ -116,7 +122,7 @@ export function ScrollArea({
       <div
         ref={mergeRefs(viewport, viewportRef)}
         onScroll={onScroll}
-        style={{ scrollbarWidth: 'none' }}
+        style={{ scrollbarWidth: 'none', scrollBehavior: 'auto' }}
         className={cn('h-full overflow-y-auto overscroll-contain', viewportClassName)}
       >
         {children}

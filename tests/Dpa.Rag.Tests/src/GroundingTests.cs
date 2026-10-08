@@ -29,6 +29,18 @@ public sealed class GroundingTests
     }
 
     [Fact]
+    public void RepairsLinesLeftWithNoSubjectByCitationStripping()
+    {
+        var result = ActAnswerer.Sanitise(
+            "Section 12 grants the rights.\nsets the principles for processing.\nand details the duties.",
+            Evidence);
+
+        Assert.DoesNotContain("sets the principles", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("and details", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("the relevant provision, the relevant provision", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void BoldsSuppliedCitationsSoTheUiHasAnchors()
     {
         var result = ActAnswerer.Sanitise("Under Section 29 the penalty applies.", Evidence);

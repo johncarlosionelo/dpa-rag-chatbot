@@ -57,6 +57,12 @@ public sealed partial class QueryRouter
     [GeneratedRegex(@"\b(it|that|this|those|these|them|there)\b", RegexOptions.IgnoreCase)]
     private static partial Regex Anaphora();
 
+    [GeneratedRegex(@"^(?:can\s+you\s+|please\s+|could\s+you\s+)?(?:explain|summarise|summarize|expand|elaborate|tell\s+me|clarify|simplify|translate|rewrite|break\s+down)\b", RegexOptions.IgnoreCase)]
+    private static partial Regex Command();
+
+    [GeneratedRegex(@"^(?:section\s+)?1\b", RegexOptions.IgnoreCase)]
+    private static partial Regex TitleOnly();
+
     [GeneratedRegex(@"\d{1,3}", RegexOptions.Compiled)]
     private static partial Regex BareNumber();
 
@@ -171,7 +177,7 @@ public sealed partial class QueryRouter
         return lines[Math.Abs(act.Length) % lines.Length];
     }
 
-    public Route Route(string question, IReadOnlyList<string> historySections, int turn)
+    public Route Route(string question, IReadOnlyList<string> historySections, int turn, string? priorTopic = null)
     {
         var trimmed = question.Trim();
 
@@ -205,14 +211,22 @@ public sealed partial class QueryRouter
             }
         }
 
+        var referencesPriorAnswer = Anaphora().IsMatch(trimmed) && !BareNumber().IsMatch(trimmed);
+
         var looksLikeFollowUp =
             FollowUp().IsMatch(trimmed) ||
             BareFollowUp().IsMatch(trimmed) ||
+            (Command().IsMatch(trimmed) && referencesPriorAnswer && trimmed.Length < 80) ||
             (Anaphora().IsMatch(trimmed) && BareNumber().IsMatch(trimmed) && trimmed.Length < 60);
 
-        if (looksLikeFollowUp && historySections.Count > 0)
+        if (looksLikeFollowUp && (historySections.Count > 0 || priorTopic is not null))
         {
-            return new Route(Intent.FollowUp, Rewrite(trimmed, historySections), historySections.ToList());
+            var substantive = historySections.FirstOrDefault(number => !TitleOnly().IsMatch(number));
+
+            return new Route(
+                Intent.FollowUp,
+                Rewrite(trimmed, historySections, priorTopic),
+                substantive is null ? [] : [substantive]);
         }
 
         return new Route(Intent.General, trimmed, []);
@@ -289,9 +303,33 @@ public sealed partial class QueryRouter
     public bool IsOutOfScope(string question, double score) =>
         score < 0.12 && !ActTerms().IsMatch(question);
 
-    private static string Rewrite(string question, IReadOnlyList<string> sections)
+    private static string Topic(string? priorTopic)
     {
-        var focus = sections.Count > 0 ? $"section {sections[0]}" : "the previous answer";
+        if (string.IsNullOrWhiteSpace(priorTopic))
+        {
+            return "the previous answer";
+        }
+
+        var trimmed = priorTopic.Length > 220 ? priorTopic[..220] : priorTopic;
+
+        return trimmed.Trim();
+    }
+
+    private static string Focus(IReadOnlyList<string> sections)
+    {
+        if (sections.Count == 0)
+        {
+            return "the previous answer";
+        }
+
+        var substantive = sections.FirstOrDefault(number => !TitleOnly().IsMatch(number));
+
+        return substantive is not null ? $"section {substantive}" : $"section {sections[0]}";
+    }
+
+    private static string Rewrite(string question, IReadOnlyList<string> sections, string? priorTopic = null)
+    {
+        var focus = sections.Count > 0 ? Focus(sections) : Topic(priorTopic);
 
         if (BareFollowUp().IsMatch(question))
         {
