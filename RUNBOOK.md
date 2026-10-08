@@ -112,7 +112,8 @@ Run these from the repository root.
 | Command | What it does |
 | --- | --- |
 | `make infra` | start the vector database only |
-| `make local` | start the local model, the fallback |
+| `make local` | start the local model only |
+| `make open` | open the app in the browser |
 | `make secrets` | show whether a cloud key is loaded |
 | `make dev` | vector database plus the app, the demo path |
 | `make test` | fast verification, about six seconds |

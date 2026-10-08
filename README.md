@@ -90,7 +90,8 @@ make dev
 
 Then open <http://127.0.0.1:5199>.
 
-`make dev` starts Qdrant, loads `.env` if it exists, and runs the app. No API key
+`make dev` starts Qdrant, starts the local model, loads `.env`, prints the link
+and opens your browser. No API key
 is required: the chain tries Groq, then NVIDIA, then the local model, and every
 rung after the first is optional.
 
