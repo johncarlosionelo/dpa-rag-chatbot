@@ -17,30 +17,87 @@ indexOptions = new BuildOptions(
     Rooted(indexOptions.CorpusPath),
     Rooted(indexOptions.IndexPath));
 
-var llmOptions = builder.Configuration.GetSection("Llm").Get<LlmOptions>()
+var vectorOptions = builder.Configuration.GetSection("VectorStore").Get<VectorStoreOptions>()
+    ?? throw new InvalidOperationException("VectorStore configuration missing");
+
+vectorOptions = new VectorStoreOptions
+{
+    Host = vectorOptions.Host,
+    Port = vectorOptions.Port,
+    Collection = vectorOptions.Collection,
+    ApiKey = ResolveOptional(vectorOptions.KeyEnv),
+};
+
+var llmSection = builder.Configuration.GetSection("Llm");
+var baseOptions = llmSection.Get<LlmSettings>()
     ?? throw new InvalidOperationException("Llm configuration missing");
 
-if (llmOptions.Models.Count == 0)
+var pinned = (Environment.GetEnvironmentVariable("LLM_CHAIN") ?? string.Empty)
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+var providers = pinned.Count == 0
+    ? baseOptions.Providers
+    : [.. baseOptions.Providers.Where(provider => pinned.Contains(provider.Name))];
+
+if (providers.Count == 0)
 {
-    throw new InvalidOperationException("Llm:Models must list at least one model");
+    throw new InvalidOperationException($"LLM_CHAIN matched no provider: {string.Join(",", pinned)}");
 }
 
-var llmKey = ResolveKey(builder.Configuration);
-Console.WriteLine($"llm chain: {string.Join(" then ", llmOptions.Models)}");
+var targets = new List<LlmTarget>();
+foreach (var provider in providers)
+{
+    var key = provider.KeyOptional
+        ? Environment.GetEnvironmentVariable(provider.KeyEnv) ?? Placeholder(provider.Name)
+        : ResolveKey(provider.KeyEnv);
+    foreach (var model in provider.Models)
+    {
+        targets.Add(new LlmTarget(provider.Name, provider.BaseUrl.TrimEnd('/'), model, key));
+    }
+}
+
+if (targets.Count == 0)
+{  
+    throw new InvalidOperationException("Llm:Providers must list at least one model");  
+}  
+
+var llmOptions = new LlmOptions
+{
+    Targets = targets,
+    MaxTokens = baseOptions.MaxTokens,
+    TimeoutSeconds = baseOptions.TimeoutSeconds,
+    Temperature = baseOptions.Temperature,
+};
+
+Console.WriteLine(
+    pinned.Count == 0
+        ? $"llm chain: {string.Join(" then ", targets.Select(t => $"{t.Name}/{t.Model}"))}"
+        : $"llm chain pinned to {string.Join(",", pinned)}: {string.Join(" then ", targets.Select(t => $"{t.Name}/{t.Model}"))}");
 
 builder.Services.AddSingleton(llmOptions);
 builder.Services.AddSingleton(indexOptions);
-builder.Services.AddHttpClient(nameof(LlmClient), client => client.Timeout = TimeSpan.FromSeconds(llmOptions.TimeoutSeconds));
-builder.Services.AddSingleton(_ => ActIndexHolder.Open(indexOptions));
+builder.Services.AddHttpClient(nameof(LlmClient), client =>
+{
+    client.Timeout = TimeSpan.FromSeconds(llmOptions.TimeoutSeconds);
+    client.DefaultRequestHeaders.ConnectionClose = false;
+});
+builder.Services.AddSingleton<IVectorStore>(_ => new QdrantVectorStore(vectorOptions));
+builder.Services.AddSingleton(sp =>
+    ActIndexHolder.Open(indexOptions, sp.GetRequiredService<IVectorStore>()));
 builder.Services.AddSingleton<ActAnswerer>(sp =>
 {
     var http = sp.GetRequiredService<IHttpClientFactory>();
     return new ActAnswerer(
         sp.GetRequiredService<ActIndexHolder>().Index,
-        new LlmClient(http.CreateClient(nameof(LlmClient)), llmOptions, llmKey));
+        new LlmClient(http.CreateClient(nameof(LlmClient)), llmOptions));
 });
 
 var app = builder.Build();
+
+var holder = app.Services.GetRequiredService<ActIndexHolder>();
+await holder.SeedAsync(CancellationToken.None);
+Console.WriteLine($"qdrant seeded: {holder.Index.Count} points");
 
 app.UseStaticFiles();
 
@@ -54,7 +111,29 @@ app.MapPost("/api/chat", async ([FromBody] ChatRequest request, HttpContext cont
     }
 
     var ct = context.RequestAborted;
-    var answer = await app.Services.GetRequiredService<ActAnswerer>().AskAsync(request.Question.Trim(), ct);
+    Answer answer;
+    try
+    {
+        answer = await app.Services
+            .GetRequiredService<ActAnswerer>()
+            .AskAsync(request.Question.Trim(), request.History ?? [], ct);
+    }
+    catch (Exception) when (!ct.IsCancellationRequested)
+    {
+        return Results.Json(
+            new
+            {
+                answer = "The answer service did not respond in time. Please try that question again.",
+                caveat = (string?)null,
+                sources = Array.Empty<SourceRef>(),
+                suggestions = Array.Empty<SourceRef>(),
+                model = (string?)null,
+                score = 0d,
+                kind = "unavailable",
+                scored = false,
+            },
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
 
     return Results.Ok(new ChatResponse(
         answer.Text,
@@ -62,15 +141,19 @@ app.MapPost("/api/chat", async ([FromBody] ChatRequest request, HttpContext cont
         answer.Sources.Select(s => new SourceRef(
             s.Number,
             s.Title,
-            s.Text.Length > 420 ? s.Text[..420] + "..." : s.Text)).ToList(),
+            s.Text)).ToList(),
         answer.Model,
-        Math.Round(answer.Score, 4)));
+        Math.Round(answer.Score, 4),
+        answer.Kind,
+        answer.Sources.Count > 0,
+        answer.Suggestions.Select(s => new SourceRef(s.Number, s.Title, s.Text)).ToList()));
 });
 
 app.MapGet("/api/act", ([FromServices] ActIndexHolder holder) => Results.Ok(new
 {
     act = holder.Index.Act,
     sections = holder.Index.Count,
+    backend = holder.Index.Backend,
 }));
 
 app.MapFallbackToFile("index.html");
@@ -90,15 +173,9 @@ static string Root()
     return directory?.FullName ?? Directory.GetCurrentDirectory();
 }
 
-static string ResolveKey(IConfiguration configuration)
+static string ResolveOptional(string keyEnv)
 {
-    var configured = configuration["Keys:LlmApiKey"];
-    if (!string.IsNullOrWhiteSpace(configured))
-    {
-        return configured;
-    }
-
-    foreach (var name in new[] { "DPA_RAG_LLM_KEY", "NVIDIA_API_KEY" })
+    foreach (var name in keyEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
     {
         var value = Environment.GetEnvironmentVariable(name);
         if (!string.IsNullOrWhiteSpace(value))
@@ -107,7 +184,47 @@ static string ResolveKey(IConfiguration configuration)
         }
     }
 
-    throw new InvalidOperationException("set DPA_RAG_LLM_KEY or NVIDIA_API_KEY");
+    return string.Empty;
+}
+
+static string Placeholder(string name) => $"local-{name}";
+
+static string ResolveKey(string keyEnv)
+{
+    foreach (var name in keyEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+        var value = Environment.GetEnvironmentVariable(name);
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            return value;
+        }
+    }
+
+    throw new InvalidOperationException($"set one of: {keyEnv}");
+}
+
+internal sealed class LlmSettings
+{
+    public int MaxTokens { get; init; } = 420;
+
+    public int TimeoutSeconds { get; init; } = 45;
+
+    public double Temperature { get; init; } = 0.1;
+
+    public IReadOnlyList<LlmProviderSettings> Providers { get; init; } = [];
+}
+
+internal sealed class LlmProviderSettings
+{
+    public string Name { get; init; } = string.Empty;
+
+    public string BaseUrl { get; init; } = string.Empty;
+
+    public string KeyEnv { get; init; } = string.Empty;
+
+    public bool KeyOptional { get; init; }
+
+    public IReadOnlyList<string> Models { get; init; } = [];
 }
 
 internal sealed class ActIndexHolder : IDisposable
@@ -116,25 +233,31 @@ internal sealed class ActIndexHolder : IDisposable
 
     public ActIndex Index { get; }
 
-    public static ActIndexHolder Open(BuildOptions options)
+    public static ActIndexHolder Open(BuildOptions options, IVectorStore vectors)
     {
-        var index = IndexBuilder.Build(options, out var created);
-        if (created > 0)
+        var index = IndexBuilder.Build(options, vectors, out var embedded);
+
+        if (embedded > 0)
         {
-            Console.WriteLine($"embedded {created} sections into {options.IndexPath}");
+            Console.WriteLine($"embedded {embedded} sections into {options.IndexPath}");
         }
         else
         {
             Console.WriteLine($"loaded {index.Count} sections from {options.IndexPath}");
         }
 
+        Console.WriteLine($"vector store: {index.Backend}");
+
         return new ActIndexHolder(index);
     }
+
+    public async Task SeedAsync(CancellationToken ct) =>
+        await Index.PersistAsync(Index.All, ct);
 
     public void Dispose() => Index.Dispose();
 }
 
-internal sealed record ChatRequest(string Question);
+internal sealed record ChatRequest(string Question, ChatTurn[]? History);
 
 internal sealed record SourceRef(string Number, string Title, string Text);
 
@@ -143,4 +266,7 @@ internal sealed record ChatResponse(
     string? Caveat,
     IReadOnlyList<SourceRef> Sources,
     string? Model,
-    double Score);
+    double Score,
+    string Kind,
+    bool Scored,
+    IReadOnlyList<SourceRef> Suggestions);

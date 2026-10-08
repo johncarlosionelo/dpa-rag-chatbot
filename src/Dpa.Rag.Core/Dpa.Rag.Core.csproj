@@ -5,5 +5,9 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
     <PackageReference Include="Microsoft.ML.Tokenizers" Version="3.0.0-preview.26457.2" />
+    <PackageReference Include="Qdrant.Client" Version="1.19.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Dpa.Rag.Tests" />
   </ItemGroup>
 </Project>
