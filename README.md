@@ -106,6 +106,8 @@ cd web && npm install && npm run build
 
 ## Running it
 
+See [RUNBOOK.md](RUNBOOK.md) for a from scratch walkthrough.
+
 Qdrant and, if you want the local fallback, Ollama both run on your machine.
 
 ```bash
