@@ -10,9 +10,13 @@ export type ChatResponse = {
   sources: SourceRef[];
   model: string | null;
   score: number;
+  kind: string;
+  scored: boolean;
+  suggestions: SourceRef[];
 };
 
 export type ChatTurn = {
+  id?: number;
   role: 'user' | 'assistant';
   question: string;
   answer?: string;
@@ -20,31 +24,45 @@ export type ChatTurn = {
   caveat?: string | null;
   model?: string | null;
   score?: number;
+  kind?: string;
+  scored?: boolean;
+  suggestions?: SourceRef[];
   pending?: boolean;
   failed?: boolean;
 };
 
-export async function ask(question: string): Promise<ChatResponse> {
+export type MemoryTurn = {
+  role: 'user' | 'assistant';
+  content: string;
+};
+
+export function toMemory(turns: ChatTurn[], limit = 4): MemoryTurn[] {
+  return turns
+    .filter((turn) => !turn.pending && !turn.failed && turn.answer)
+    .slice(-limit)
+    .flatMap((turn) => [
+      { role: 'user' as const, content: turn.question },
+      { role: 'assistant' as const, content: turn.answer ?? '' },
+    ]);
+}
+
+export async function ask(question: string, history: MemoryTurn[] = []): Promise<ChatResponse> {
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, history }),
   });
-
-  if (!response.ok) {
-    throw new Error(`request failed with ${response.status}`);
-  }
 
   return (await response.json()) as ChatResponse;
 }
 
-export async function act(): Promise<{ act: string; sections: number }> {
+export async function act(): Promise<{ act: string; sections: number; backend: string }> {
   const response = await fetch('/api/act');
   if (!response.ok) {
     throw new Error(`request failed with ${response.status}`);
   }
 
-  return (await response.json()) as { act: string; sections: number };
+  return (await response.json()) as { act: string; sections: number; backend: string };
 }
 
 export const SUGGESTIONS = [
@@ -53,5 +71,5 @@ export const SUGGESTIONS = [
   'What is sensitive personal information?',
   'How long must a company keep personal information?',
   'Who is exempt from the Act?',
-  'How do I bake sourdough bread?',
+  'What must a company do when personal information is breached?',
 ];
