@@ -1,4 +1,5 @@
 using Dpa.Rag.Core;
+using Grpc.Core;
 using Microsoft.AspNetCore.Mvc;
 
 var root = Root();
@@ -106,8 +107,30 @@ builder.Services.AddSingleton<ActAnswerer>(sp =>
 var app = builder.Build();
 
 var holder = app.Services.GetRequiredService<ActIndexHolder>();
-await holder.SeedAsync(CancellationToken.None);
-Console.WriteLine($"qdrant seeded: {holder.Index.Count} points");
+var vectors = app.Services.GetRequiredService<IVectorStore>();
+
+try
+{
+    await holder.SeedAsync(CancellationToken.None);
+    Console.WriteLine($"qdrant seeded: {holder.Index.Count} points");
+}
+catch (RpcException ex) when (ex.StatusCode == StatusCode.Unavailable || ex.StatusCode == StatusCode.DeadlineExceeded)
+{
+    Console.Error.WriteLine($"""
+        The vector database is not reachable at {vectors.Endpoint}.
+
+        Qdrant runs as a separate service. Start it, then run the app again:
+
+            make infra
+
+        If you are not using make, that command is:
+
+            colima start --cpu 2 --memory 4 --disk 20
+            docker start dpa-qdrant
+
+        """);
+    Environment.Exit(1);
+}
 
 app.UseStaticFiles();
 

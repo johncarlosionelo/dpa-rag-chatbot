@@ -23,6 +23,8 @@ public interface IVectorStore : IDisposable
 {
     string Backend { get; }
 
+    string Endpoint { get; }
+
     Task EnsureCollectionAsync(int dimensions, CancellationToken ct);
 
     Task UpsertAsync(IReadOnlyList<EmbeddedSection> sections, CancellationToken ct);
@@ -49,6 +51,8 @@ public sealed class QdrantVectorStore : IVectorStore, IDisposable
     }
 
     public string Backend => $"qdrant {_options.Host}:{_options.Port} / {_options.Collection}";
+
+    public string Endpoint => $"{_options.Host}:{_options.Port}";
 
     public async Task EnsureCollectionAsync(int dimensions, CancellationToken ct)
     {

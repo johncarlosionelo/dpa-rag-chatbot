@@ -82,47 +82,30 @@ The parser strips the site's navigation chrome, repeated page headers, "Back To 
 
 ## Running it
 
-Requires the .NET 10 SDK.
+Two commands. See [RUNBOOK.md](RUNBOOK.md) for the full walkthrough.
 
 ```bash
-export DPA_RAG_LLM_KEY=<key>
-dotnet run --project src/Dpa.Rag.Api
+# terminal 1, leave running
+colima start --cpu 2 --memory 4 --disk 20 && /opt/homebrew/opt/ollama/bin/ollama serve
+
+# terminal 2
+make dev
 ```
 
-Then open `http://127.0.0.1:5199`. The first run builds the vector index from `data/dpa_articles.json` and takes about a second. Later runs load the cached index.
+Then open <http://127.0.0.1:5199>.
 
-To rebuild the corpus from the PDF:
-
-```bash
-dotnet run --project tools/Dpa.Rag.Ingest -- data/source/dpa_npc.pdf data/dpa_articles.json
-rm data/section_index.json
-```
-
-To rebuild the client:
+`make dev` starts Qdrant and then the app. No API key is required: the chain
+tries Groq, then NVIDIA, then the local model, and every rung after the first is
+optional.
 
 ```bash
-cd web && npm install && npm run build
-```
-
-## Running it
-
-See [RUNBOOK.md](RUNBOOK.md) for a from scratch walkthrough.
-
-Qdrant and, if you want the local fallback, Ollama both run on your machine.
-
-```bash
-colima start
-docker run -d --name dpa-qdrant -p 6333:6333 -p 6334:6334 \
-  -v dpa_qdrant:/qdrant/storage qdrant/qdrant:latest
-
-ollama serve
-ollama pull qwen2.5:7b
-```
-
-The model chain is Groq first, then NVIDIA, then Ollama. Every provider after the first is optional, so the app starts with only one key. Set `GROQ_API_KEY` for the 27B, `DPA_RAG_LLM_KEY` for the NVIDIA models. Ollama needs no key.
-
-```bash
-dotnet run --project src/Dpa.Rag.Api
+make infra    # vector database only
+make dev      # vector database and app, the demo path
+make test     # verification, about six seconds
+make check    # print what the vector database holds
+make status   # which services are up
+make stop     # stop everything
+make help     # every target
 ```
 
 ## Verification

@@ -1,139 +1,148 @@
-# Running from scratch
+# Running this project
 
-Nothing here assumes a previous session. Follow it in order, top to bottom.
+Everything below assumes a fresh machine and no prior session. If you just want
+to demo it, read **Quick start** and stop.
 
-## 0. Prerequisites
+---
 
-You need the .NET 10 SDK, Node, Docker CLI, Colima and Ollama.
+## Quick start
 
-```bash
-dotnet --version        # 10.0.401 or newer
-node --version
-docker --version
-colima version
-ollama --version
-```
+Two commands. That is the whole demo path.
 
-Install anything missing:
+**Terminal 1**
 
 ```bash
-brew install dotnet node colima
-# Ollama: https://ollama.com/download
+colima start --cpu 2 --memory 4 --disk 20 && /opt/homebrew/opt/ollama/bin/ollama serve
 ```
 
-If Ollama lives outside Homebrew on Apple Silicon, its binaries are usually already on your PATH. If `ollama` is not found, run it from wherever it installed, or add it:
+Leave it running. It prints a wall of logs, that is normal.
+
+**Terminal 2**
 
 ```bash
-export PATH="/opt/homebrew/opt/ollama/bin:$PATH"
+cd ~/Desktop/dpa-rag && make dev
 ```
 
-## 1. Start Qdrant
+`make dev` starts the vector database, then runs the app. Open
+**http://127.0.0.1:5199**.
 
-Qdrant is the vector database. It runs as a container inside Colima.
+Type a question and wait about 15 seconds on a cold local model. That is expected.
+
+---
+
+## What you need installed
+
+| Tool | Why | Get it |
+| --- | --- | --- |
+| .NET 10 SDK | runs the backend | `brew install dotnet` |
+| Node.js 18 or newer | builds the client | `brew install node` |
+| Docker CLI | talks to Qdrant | ships with Docker Desktop, or use Colima |
+| Colima | runs the Docker daemon on macOS without Docker Desktop | `brew install colima` |
+| Ollama | runs the local model | <https://ollama.com/download> |
+
+Check everything at once:
 
 ```bash
-colima start --cpu 2 --memory 4 --disk 20
+dotnet --version && node --version && docker --version && colima version && ollama --version
 ```
 
-First run only, create the container:
+### If `ollama` is not found
+
+Homebrew installs it outside the default PATH on Apple Silicon. Either use the
+full path, which the commands above already do:
 
 ```bash
-docker run -d --name dpa-qdrant \
-  -p 6333:6333 -p 6334:6334 \
-  -v dpa_qdrant:/qdrant/storage \
-  qdrant/qdrant:latest
+/opt/homebrew/opt/ollama/bin/ollama
 ```
 
-Check it:
+or add it once:
+
+```bash
+echo 'export PATH="/opt/homebrew/opt/ollama/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+```
+
+---
+
+## The two services
+
+The app talks to two things that run on your machine. Neither is part of the
+application process, and that is deliberate.
+
+**Qdrant** is the vector database. It holds one point per section, 384
+dimensions, cosine distance. It runs as a container.
+
+**Ollama** is the language model. It runs locally so the app has a fallback that
+cannot be rate limited or go down with an outage.
+
+---
+
+## Model keys
+
+You need **no key at all** to run this. The local model answers on its own.
+
+Add keys only to make it faster:
+
+```bash
+export GROQ_API_KEY=...        # fastest, roughly half a second per answer
+export DPA_RAG_LLM_KEY=...     # second cloud fallback
+```
+
+The chain tries Groq, then NVIDIA, then the local model. Each rung after the
+first is optional, so any single key works and no key also works.
+
+---
+
+## Everyday commands
+
+Run these from the repository root.
+
+| Command | What it does |
+| --- | --- |
+| `make infra` | start the vector database only |
+| `make dev` | vector database plus the app, the demo path |
+| `make test` | fast verification, about six seconds |
+| `make check` | print what the vector database is holding |
+| `make status` | show which services are up |
+| `make stop` | stop everything |
+| `make clean` | stop everything and clear local caches |
+| `make help` | list every target |
+
+---
+
+## Verifying before a demo
+
+Six seconds, no model call, no network:
+
+```bash
+make test
+```
+
+Expect fifty passing tests, zero build warnings, and four clean gate lines.
+
+Then prove the vector database holds real data:
+
+```bash
+make check
+```
+
+Expect `points 45, 384 dim, Cosine, status green`.
+
+If someone asks what is in the database, point them at the collection itself:
 
 ```bash
 curl -s http://127.0.0.1:6333/collections/dpa_sections_minilm
 ```
 
-An empty collection returns a JSON error about the collection not existing, which is expected on a first run. A working Qdrant answers on port 6333.
+---
 
-## 2. Start Ollama
+## Slow verification
 
-This is the local model. It is the unlimited fallback, so the app never dies when a hosted provider is rate limited.
-
-```bash
-ollama serve
-```
-
-Leave that running. In a second terminal:
-
-```bash
-ollama pull qwen2.5:7b
-```
-
-Roughly 4.7 GB, one time only.
-
-Check it:
-
-```bash
-curl -s http://127.0.0.1:11434/api/version
-```
-
-## 3. Build
-
-```bash
-cd ~/Desktop/dpa-rag
-dotnet build
-(cd web && npm install && npm run build)
-```
-
-The client build writes into `src/Dpa.Rag.Api/wwwroot`, which is where the API serves it from.
-
-## 4. Run
-
-You need at least one model key. Any one of these is enough, and they stack.
-
-```bash
-export GROQ_API_KEY=<your groq key>
-export DPA_RAG_LLM_KEY=<your nvidia key>
-```
-
-Ollama needs no key at all.
-
-```bash
-dotnet run --project src/Dpa.Rag.Api
-```
-
-On the first run it embeds all 45 sections, writes the cache, and upserts into Qdrant. That takes a few seconds. Later runs load the cache.
-
-```
-llm chain: groq/qwen/qwen3.8-27b then groq/openai/gpt-oss-120b then nvidia/z-ai/glm-5.3-flash then ollama/qwen2.5:7b
-loaded 45 sections from .../data/section_index.json
-vector store: qdrant 127.0.0.1:6334 / dpa_sections_minilm
-qdrant seeded: 45 points
-```
-
-Open <http://127.0.0.1:5199>.
-
-## 5. Verify before you demo
-
-The fast tier needs no model and no network. Run it in front of them if you like.
-
-```bash
-bash scripts/verify_all.sh
-```
-
-Finishes in about six seconds. Expect `Passed: 50`, zero warnings, and four PASS lines from the clean gate.
-
-Confirm the vector database really holds the data:
-
-```bash
-curl -s http://127.0.0.1:6333/collections/dpa_sections_minilm
-```
-
-Look for `points_count` of 45, `size` of 384 and `distance` of `Cosine`.
-
-The slow tier drives a real model and takes minutes. Do it before the demo, not during it.
+The end to end suite drives a real model and takes minutes, not seconds. Run it
+before a demo, never during one.
 
 ```bash
 # terminal 1
-LLM_CHAIN=ollama ASPNETCORE_URLS=http://127.0.0.1:5310 \
-  dotnet run --project src/Dpa.Rag.Api
+LLM_CHAIN=ollama ASPNETCORE_URLS=http://127.0.0.1:5310 dotnet run --project src/Dpa.Rag.Api
 
 # terminal 2
 CHAT_URL=http://127.0.0.1:5310/api/chat \
@@ -141,29 +150,98 @@ STRESS_DEADLINE=2400 STRESS_WORKERS=2 \
   python3 scripts/stress_test.py
 ```
 
-It writes progress to `tmp/stress.log` as it goes, so you can watch it with `tail -f tmp/stress.log`. Use `STRESS_WORKERS=2`. A local 7B on 16 GB cannot absorb more than that and the extra requests time out and look like failures.
-
-## 6. Stop everything
+Progress is written as it runs:
 
 ```bash
-pkill -f "Dpa.Rag.Api"
-pkill -f "ollama serve"
-colima stop
+tail -f tmp/stress.log
 ```
 
-## Troubleshooting
+Use `STRESS_WORKERS=2`. A local 7B model on 16 GB cannot take more concurrent
+requests, and the excess time out and look like application failures.
 
-**`QdrantVectorStore` fails to connect.** Colima is not up, or the container is not running. Check `docker ps`. If the container exists but is stopped, `docker start dpa-qdrant`.
+---
 
-**`llm chain pinned` message.** That means `LLM_CHAIN` is set. Unset it for a normal run.
-
-**`503` on every question.** Every provider failed. With no key set, only Ollama is available, so check `ollama ps` and make sure `qwen2.5:7b` is pulled.
-
-**Answers are slow.** Groq is the fast path at roughly half a second. Once its daily quota is spent the chain falls to the local model at five to fifteen seconds. That is expected and not a fault.
-
-**Empty or wrong search results.** Confirm the seed line printed `qdrant seeded: 45 points`. If the vector index was rebuilt with a different embedding model, delete the cache and let it rebuild.
+## Rebuilding from source
 
 ```bash
+dotnet build
+(cd web && npm install && npm run build)
+```
+
+The client build writes into `src/Dpa.Rag.Api/wwwroot`, which is where the API
+serves it from.
+
+To re-parse the statute from the PDF:
+
+```bash
+dotnet run --project tools/Dpa.Rag.Ingest -- data/source/dpa_npc.pdf data/dpa_articles.json
 rm data/section_index.json
 dotnet run --project src/Dpa.Rag.Api
+```
+
+---
+
+## Shutting down
+
+```bash
+make stop
+```
+
+---
+
+## When something breaks
+
+**"The vector database is not reachable"**
+
+Qdrant is down. Run `make infra`, then run the app again. This happens whenever
+Colima has been stopped, because the container stops with the virtual machine.
+
+**"llm chain pinned to ollama" in the startup banner**
+
+`LLM_CHAIN` is set in the environment. Unset it:
+
+```bash
+unset LLM_CHAIN
+```
+
+**Every answer is slow**
+
+That is the local model, and it is the expected fallback. A fresh Groq quota
+brings it back to roughly half a second.
+
+**Every answer returns a service error**
+
+No model is available. Check the local model is loaded:
+
+```bash
+ollama list
+curl -s http://127.0.0.1:11434/api/version
+```
+
+**Search results look wrong**
+
+The vector index may have been built with a different embedding model. Clear the
+cache and let it rebuild on the next start:
+
+```bash
+make clean && make dev
+```
+
+**Port 5199 already in use**
+
+Another instance is still running. `make stop`, then start again.
+
+---
+
+## Why there are two terminals
+
+Colima and Ollama are long running services. They hold their terminal open and
+keep running while you work. The app is started separately so it can print its
+startup banner and stay attached to its own logs.
+
+If you only have one terminal, background the first service:
+
+```bash
+nohup /opt/homebrew/opt/ollama/bin/ollama serve > /tmp/ollama.log 2>&1 &
+make dev
 ```
